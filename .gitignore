@@ -1,15 +1,48 @@
-# Binaries for programs and plugins
+# Created by .ignore support plugin (hsz.mobi)
+### Go template
+# Compiled Object files, Static and Dynamic libs (Shared Objects)
 *.exe
-*.exe~
-*.dll
+*.o
 *.so
 *.dylib
 
-# Test binary, built with `go test -c`
 *.test
-
-# Output of the go coverage tool, specifically when used with LiteIDE
+*.prof
 *.out
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
+ostentatious
+
+# Folders
+_obj
+_test
+
+error_logs/
+output/
+vendor/
+dist/
+
+.vscode
+.idea
+
+x.*
+y.*
+z.*
+
+# Architecture specific extensions/prefixes
+*.[568vq]
+[568vq].out
+
+*.cgo1.go
+*.cgo2.c
+_cgo_defun.c
+_cgo_gotypes.go
+_cgo_export.*
+
+_testmain.go
+
+debug
+__debug_bin
+
+.DS_Store
+
+lib/loglib/logrelaycaasp.pem
