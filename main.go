@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -17,13 +18,14 @@ import (
 	"golang.org/x/oauth2"
 )
 
-const port = ":8888"
-const configFile = "/Users/u80860794/.config/ostentatious/config.json"
-const htmlTemplate = `
+const (
+	port         = ":8888"
+	configFile   = "/Users/u80860794/.config/ostentatious/config.json"
+	htmlTemplate = `
 <!DOCTYPE html>
 <html lang="en">
     <head>
-        <title>Login Sucessful</title>
+        <title>Login Successful</title>
         <meta charset="UTF-8">
     </head>
     <body>
@@ -35,8 +37,7 @@ const htmlTemplate = `
     </body>
 </html>
 `
-
-var redirectURI = fmt.Sprintf("http://localhost%s/callback", port)
+)
 
 var (
 	auth = spotifyauth.New(spotifyauth.WithRedirectURL(redirectURI), spotifyauth.WithScopes(
@@ -47,142 +48,141 @@ var (
 		spotifyauth.ScopePlaylistModifyPublic,
 		spotifyauth.ScopeUserReadPlaybackState,
 	))
-	ch    = make(chan *spotify.Client)
-	state = "abc123"
+	ch          = make(chan *spotify.Client)
+	state       = "abc123"
+	redirectURI = fmt.Sprintf("http://localhost%s/callback", port)
 )
+
+var data Data
 
 type Data struct {
 	Token        oauth2.Token `json:"token"`
-	PlaylistName string       `json:"playlist_name"`
+	PlaylistName string       `json:"playlistName"`
 }
 
-// TODO: Improve error handling (dont panic everywhere)
+// TODO: Improve error handling (don't panic everywhere)
 func main() {
 	ctx := context.Background()
-	var setPlaylist bool
-	flag.BoolVar(&setPlaylist, "reset", false, "To reset the playlist chosen by the first startup")
+
+	var hasToSetPlaylist bool
+
+	flag.BoolVar(&hasToSetPlaylist, "reset", false, "To reset the playlist chosen by the first startup")
 	flag.Parse()
-	var data Data
-	go func() {
-		content, err := os.ReadFile(configFile)
-		if err != nil {
-			file, errr := os.Create(configFile)
-			if errr != nil {
-				panic(errr)
-			}
-			defer file.Close()
-			startserver()
-			return
-		}
-		err = json.Unmarshal(content, &data)
-		if err != nil {
-			startserver()
-			return
-		}
-		client := spotify.New(auth.Client(ctx, &data.Token))
-		if client == nil {
-			startserver()
-			return
-		}
-		ch <- client
-	}()
+
+	// Create data variable and defer to write it
+	defer writeData()
+
+	// Get the client, either from config file or from oauth
+	go getClient(ctx)
 
 	// wait for auth to complete
 	client := <-ch
 
-	newTok, err := client.Token()
+	// Update token
+	newToken, err := client.Token()
 	if err != nil {
 		panic(err)
 	}
-	data.Token = *newTok
+
+	data.Token = *newToken
+
+	// Get current user
 	user, err := client.CurrentUser(ctx)
 	if err != nil {
 		panic(err)
 	}
-	playlistPager, err := client.GetPlaylistsForUser(ctx, user.ID)
-	if err != nil {
-		panic(err)
-	}
-	playlists := getAllPlaylists(ctx, client, playlistPager)
-	playlistNames := make([]string, len(playlists))
-	for i, p := range playlists {
-		playlistNames[i] = p.Name
-	}
-	if setPlaylist || data.PlaylistName == "" {
+
+	// Get Playlists of user
+	playlists := getAllPlaylistsForUser(ctx, user, client)
+	playlistNames := getPlaylistNames(playlists)
+
+	// Set Playlist if needs to
+	if hasToSetPlaylist || data.PlaylistName == "" {
 		data.PlaylistName = selectPlaylist(playlistNames)
 	}
-	var playlist spotify.SimplePlaylist
-	for _, p := range playlists {
-		if p.Name != data.PlaylistName {
-			continue
-		}
-		playlist = p
-		break
-	}
+
+	// Get playlist from name
+	playlist := getPlaylistFromName(data.PlaylistName, playlists)
+
+	// Get the currently playing track ID
 	currentlyPlaying, err := client.PlayerCurrentlyPlaying(ctx)
 	if err != nil {
 		panic(err)
 	}
-	trackID := currentlyPlaying.Item.ID
-	playlistTrackPager, err := client.GetPlaylistTracks(ctx, playlist.ID)
-	if err != nil {
-		panic(err)
-	}
-	tracks := getPlaylistTracks(ctx, client, playlistTrackPager)
-	var isAlreadyInPlaylist bool
-	for _, track := range tracks {
-		if trackID == track.Track.ID {
-			isAlreadyInPlaylist = true
-		}
-	}
-	if isAlreadyInPlaylist {
-		writeData(data)
+
+	if currentlyPlaying == nil || currentlyPlaying.Item == nil {
+		fmt.Println("Currently not playing a song")
+
 		return
 	}
+
+	trackID := currentlyPlaying.Item.ID
+
+	// Get tracks From Playlist
+	tracks := getPlaylistTracksFromPlaylist(ctx, client, playlist)
+
+	// Only add to playlist if not already in it
+	isTrackAlreadyInPlaylist := isTrackIDInTracks(trackID, tracks)
+	if isTrackAlreadyInPlaylist {
+		return
+	}
+
+	// Add track
 	_, err = client.AddTracksToPlaylist(ctx, playlist.ID, trackID)
 	if err != nil {
 		panic(err)
 	}
-	writeData(data)
 }
 
-func writeData(data Data) {
-	out, err := json.Marshal(data)
+func getAllPlaylistsForUser(ctx context.Context, user *spotify.PrivateUser, client *spotify.Client) []spotify.SimplePlaylist {
+	playlistsPagable, err := client.GetPlaylistsForUser(ctx, user.ID)
 	if err != nil {
 		panic(err)
 	}
-	file, err := os.Create(configFile)
-	if err != nil {
-		panic(err)
-	}
-	defer file.Close()
-	file.Write(out)
-}
 
-func getAllPlaylists(ctx context.Context, client *spotify.Client, p *spotify.SimplePlaylistPage) []spotify.SimplePlaylist {
 	playlists := []spotify.SimplePlaylist{}
+
 	for {
-		playlists = append(playlists, p.Playlists...)
-		if err := client.NextPage(ctx, p); err == spotify.ErrNoMorePages {
+		playlists = append(playlists, playlistsPagable.Playlists...)
+
+		if err := client.NextPage(ctx, playlistsPagable); errors.Is(err, spotify.ErrNoMorePages) {
 			break
 		} else if err != nil {
 			panic(err)
 		}
 	}
+
 	return playlists
 }
 
-func getPlaylistTracks(ctx context.Context, client *spotify.Client, p *spotify.PlaylistTrackPage) []spotify.PlaylistTrack {
+func getPlaylistTracksFromPlaylist(ctx context.Context, client *spotify.Client, playlist spotify.SimplePlaylist) []spotify.PlaylistTrack {
+	p, err := client.GetPlaylistTracks(ctx, playlist.ID)
+	if err != nil {
+		panic(err)
+	}
+
 	tracks := []spotify.PlaylistTrack{}
+
 	for {
 		tracks = append(tracks, p.Tracks...)
-		if err := client.NextPage(ctx, p); err == spotify.ErrNoMorePages {
+
+		if err := client.NextPage(ctx, p); errors.Is(err, spotify.ErrNoMorePages) {
 			break
 		} else if err != nil {
 			panic(err)
 		}
 	}
+
 	return tracks
+}
+
+func getPlaylistNames(playlists []spotify.SimplePlaylist) []string {
+	playlistNames := make([]string, len(playlists))
+	for i, p := range playlists {
+		playlistNames[i] = p.Name
+	}
+
+	return playlistNames
 }
 
 func selectPlaylist(playlists []string) string {
@@ -197,12 +197,51 @@ func selectPlaylist(playlists []string) string {
 		)
 	}
 	prompt.StartInSearchMode = true
-	_, res, err := prompt.Run()
 
+	_, res, err := prompt.Run()
 	if err != nil {
 		panic(err)
 	}
+
 	return res
+}
+
+func getPlaylistFromName(name string, playlists []spotify.SimplePlaylist) (playlist spotify.SimplePlaylist) {
+	for _, p := range playlists {
+		if p.Name == name {
+			playlist = p
+		}
+	}
+
+	return
+}
+
+func isTrackIDInTracks(trackID spotify.ID, tracks []spotify.PlaylistTrack) (alreadyInPlaylist bool) {
+	for _, track := range tracks {
+		if trackID == track.Track.ID {
+			alreadyInPlaylist = true
+		}
+	}
+
+	return
+}
+
+func writeData() {
+	out, err := json.Marshal(data)
+	if err != nil {
+		panic(err)
+	}
+
+	file, err := os.Create(configFile)
+	if err != nil {
+		panic(err)
+	}
+	defer file.Close()
+
+	_, err = file.Write(out)
+	if err != nil {
+		panic(err)
+	}
 }
 
 func openbrowser(url string) {
@@ -216,12 +255,12 @@ func openbrowser(url string) {
 	case "darwin":
 		err = exec.Command("open", url).Start()
 	default:
-		err = fmt.Errorf("unsupported platform")
+		err = errors.New("unsupported platform")
 	}
+
 	if err != nil {
 		panic(err)
 	}
-
 }
 
 func completeAuth(w http.ResponseWriter, r *http.Request) {
@@ -230,15 +269,46 @@ func completeAuth(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Couldn't get token", http.StatusForbidden)
 		panic(err)
 	}
+
 	if st := r.FormValue("state"); st != state {
 		http.NotFound(w, r)
 		panic(fmt.Sprintf("State mismatch: %s != %s\n", st, state))
 	}
 
-	w.Write([]byte(htmlTemplate))
+	_, err = w.Write([]byte(htmlTemplate))
+	if err != nil {
+		panic(err)
+	}
 
 	// use the token to get an authenticated client
 	client := spotify.New(auth.Client(r.Context(), tok))
+	ch <- client
+}
+
+func getClient(ctx context.Context) {
+	content, err := os.ReadFile(configFile)
+	if err != nil {
+		fmt.Printf("No config file %v found, processing with initial setup\n", configFile)
+		startserver()
+
+		return
+	}
+
+	err = json.Unmarshal(content, &data)
+	if err != nil {
+		fmt.Printf("Could not unmarshal JSON in file %v, processing with initial setup\n", configFile)
+		startserver()
+
+		return
+	}
+
+	client := spotify.New(auth.Client(ctx, &data.Token))
+	if client == nil {
+		fmt.Printf("Could not create client from data in file %v, processing with initial setup\n", configFile)
+		startserver()
+
+		return
+	}
 	ch <- client
 }
 
