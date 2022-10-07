@@ -11,6 +11,7 @@
 *.out
 
 ostentatious
+main
 
 # Folders
 _obj
