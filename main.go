@@ -20,7 +20,6 @@ import (
 
 const (
 	port         = ":8888"
-	configFile   = "/Users/u80860794/.config/ostentatious/config.json"
 	htmlTemplate = `
 <!DOCTYPE html>
 <html lang="en">
@@ -286,6 +285,12 @@ func completeAuth(w http.ResponseWriter, r *http.Request) {
 }
 
 func getClient(ctx context.Context) {
+	dirname, err := os.UserHomeDir()
+	if err != nil {
+		panic(err)
+	}
+
+	configFile := dirname + "/.config/ostentatious/config.json"
 	content, err := os.ReadFile(configFile)
 	if err != nil {
 		fmt.Printf("No config file %v found, processing with initial setup\n", configFile)
