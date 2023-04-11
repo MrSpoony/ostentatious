@@ -64,8 +64,10 @@ func main() {
 	ctx := context.Background()
 
 	var hasToSetPlaylist bool
+	var remove bool
 
 	flag.BoolVar(&hasToSetPlaylist, "reset", false, "To reset the playlist chosen by the first startup")
+	flag.BoolVar(&remove, "r", false, "To remove the current song from the playlist instead of adding it")
 	flag.Parse()
 
 	// Create data variable and defer to write it
@@ -117,14 +119,24 @@ func main() {
 
 	trackID := currentlyPlaying.Item.ID
 
-	// Get tracks From Playlist
-	tracks := getPlaylistTracksFromPlaylist(ctx, client, playlist)
+	_, err = client.RemoveTracksFromPlaylist(ctx, playlist.ID, trackID)
+	if err != nil {
+		panic(err)
+	}
 
-	// Only add to playlist if not already in it
-	isTrackAlreadyInPlaylist := isTrackIDInTracks(trackID, tracks)
-	if isTrackAlreadyInPlaylist {
+	if remove {
 		return
 	}
+
+	// // Get tracks From Playlist
+	// tracks := getPlaylistTracksFromPlaylist(ctx, client, playlist)
+	//
+	// // Only add to playlist if not already in it
+	// isTrackAlreadyInPlaylist := isTrackIDInTracks(trackID, tracks)
+	//
+	// if isTrackAlreadyInPlaylist {
+	// 	return
+	// }
 
 	// Add track
 	_, err = client.AddTracksToPlaylist(ctx, playlist.ID, trackID)
